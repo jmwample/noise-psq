@@ -12,93 +12,48 @@
 #![warn(missing_docs)]
 
 pub mod error;
-pub use error::NoiseError;
-pub mod stream;
 pub mod psk;
+pub mod stream;
 
+pub use crate::error::NoiseError;
+use crate::psk::{PskInitiator, PskResponder};
 use crate::stream::{NoisePattern, NoiseStream};
-use libcrux_kem::{PrivateKey, PublicKey};
-use libcrux_psq::{
-    cred::Ed25519,
-    impls::X25519,
-    psk_registration::{Initiator, InitiatorMsg, Responder, ResponderMsg},
-    traits::{Decode, Encode},
-};
+
 use rand::prelude::*;
 use sha2::{Digest, Sha256};
 use snow::Builder;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::*;
 
 use std::time::Duration;
 
 const NOISE_PSK_PREFIX: &[u8] = b"NYMTECH_NOISE_dQw4w9WgXcQ";
-const DEFAULT_PSK_TTL: Duration = Duration::from_secs(3600);
 
 /// Given an async read/write stream initiate a noise handshake using the specified
 /// pattern and provided keys. On success a wrapped connection is returned.
-pub async fn upgrade_noise_initiator<C>(
+pub async fn upgrade_noise_initiator<C, P>(
     mut conn: C,
     rng: &mut impl CryptoRng,
     pattern: NoisePattern,
     local_private_key: impl AsRef<[u8]>,
-    local_ident_privkey: impl AsRef<[u8]>,
-    local_ident_credential: impl AsRef<[u8]>,
     remote_pub_key: impl AsRef<[u8]>,
+    psk_initiator: P::Initiator,
     epoch: u32,
     ctx: String,
 ) -> Result<NoiseStream<C>, NoiseError>
 where
     C: AsyncRead + AsyncWrite + Unpin,
+    P: psk::PSK,
 {
     debug!("Perform Noise Handshake, initiator side");
 
-    let mut local_privkey = [0u8; 32];
-    local_privkey[..].copy_from_slice(&local_private_key.as_ref());
-    let mut local_ident_key = [0u8; 32];
-    local_ident_key[..].copy_from_slice(&local_ident_privkey.as_ref());
-    let mut local_ident_cred = [0u8; 32];
-    local_ident_cred[..].copy_from_slice(&local_ident_credential.as_ref());
-    let remote_pubkey = PublicKey::decode(libcrux_kem::Algorithm::X25519, remote_pub_key.as_ref())?;
-
-    // Generate the first PSQ message
-    let (state, msg) = Initiator::send_initial_message::<Ed25519, X25519>(
-        ctx.as_bytes(),
-        DEFAULT_PSK_TTL,
-        &remote_pubkey,
-        &local_ident_key,
-        &local_ident_cred,
-        rng,
-    )
-    .unwrap();
-    let encoded_msg = msg.encode();
-    trace!("sending {} bytes for initiator msg", encoded_msg.len());
-    conn.write_all(&(encoded_msg.len() as u64).to_be_bytes())
+    let psk = psk_initiator
+        .initiator_establish_psk(&mut conn, rng, ctx)
         .await?;
-    conn.write_all(&encoded_msg).await?;
-
-    // Read the response
-    let mut msg_size = [0u8; 8];
-    conn.read_exact(&mut msg_size).await?;
-    let msg_size = u64::from_be_bytes(msg_size);
-    trace!("reading {} bytes for responder msg", msg_size);
-
-    let mut responder_msg = vec![0u8; msg_size as usize];
-    conn.read_exact(&mut responder_msg).await?;
-    let (responder_msg, _) = ResponderMsg::decode(&responder_msg)?;
-
-    // Finish the handshake
-    let psk = state.complete_handshake(&responder_msg)?;
-
-    debug!(
-        "Registered psk for: {}",
-        String::from_utf8(psk.psk_handle.clone()).unwrap()
-    );
-    debug!("  with psk: {:x?}", psk.psk);
 
     let secret = [
         NOISE_PSK_PREFIX.to_vec(),
-        psk.psk.to_vec(),
+        psk.as_ref().to_vec(),
         remote_pub_key.as_ref().to_vec(),
         epoch.to_be_bytes().to_vec(),
     ]
@@ -120,66 +75,28 @@ where
 /// Given an async read/write stream attempt to listen for and respond to a noise
 /// handshake using the specified pattern and provided keys. On success a wrapped
 /// connection is returned.
-pub async fn upgrade_noise_responder<C>(
+pub async fn upgrade_noise_responder<C, P>(
     mut conn: C,
     pattern: NoisePattern,
     local_public_key: impl AsRef<[u8]>,
     local_private_key: impl AsRef<[u8]>,
-    initiator_cred: impl AsRef<[u8]>,
+    psk_responder: P::Responder,
     epoch: u32,
     ctx: String,
-    handle: String,
 ) -> Result<NoiseStream<C>, NoiseError>
 where
     C: AsyncRead + AsyncWrite + Unpin,
+    P: psk::PSK,
 {
     debug!("Perform Noise Handshake, responder side");
 
-    // Read the initial PSQ message.
-    // First the length as u64.
-    let mut msg_size = [0u8; 8];
-    conn.read_exact(&mut msg_size).await?;
-    let msg_size = u64::from_be_bytes(msg_size);
-    trace!("reading {} bytes for initiator msg", msg_size);
-
-    let mut msg = vec![0u8; msg_size as usize];
-    conn.read_exact(&mut msg).await?;
-    let (msg, _) = InitiatorMsg::<X25519>::decode(&msg)?;
-
-    let local_privkey =
-        PrivateKey::decode(libcrux_kem::Algorithm::X25519, local_private_key.as_ref())?;
-    let local_pubkey =
-        PublicKey::decode(libcrux_kem::Algorithm::X25519, local_public_key.as_ref())?;
-    let mut initiator_credential = [0u8; 32];
-    initiator_credential[..].copy_from_slice(initiator_cred.as_ref());
-
-    let (psk, msg) = Responder::send::<Ed25519, X25519>(
-        handle.as_bytes(),
-        DEFAULT_PSK_TTL,
-        ctx.as_bytes(),
-        &local_pubkey,
-        &local_privkey,
-        &initiator_credential,
-        &msg,
-    )?;
-
-    trace!("received valid initiator msg");
-
-    // Send the message back.
-    let encoded_msg = msg.encode();
-    let msg_size = (encoded_msg.len() as u64).to_be_bytes();
-    conn.write_all(&msg_size).await?;
-    conn.write_all(&encoded_msg).await?;
-
-    debug!(
-        "Registered psk for: {}",
-        String::from_utf8(psk.psk_handle.clone()).unwrap()
-    );
-    debug!("  with psk: {:x?}", psk.psk);
+    let psk = psk_responder
+        .responder_establish_psk(&mut conn, ctx)
+        .await?;
 
     let secret = [
         NOISE_PSK_PREFIX.to_vec(),
-        psk.psk.to_vec(),
+        psk.as_ref().to_vec(),
         local_public_key.as_ref().to_vec(),
         epoch.to_be_bytes().to_vec(),
     ]
@@ -203,9 +120,12 @@ mod test {
     use std::time::Duration;
     use std::{env, str::FromStr, sync::Once};
 
+    use libcrux_psq::cred::Ed25519;
+    use libcrux_psq::impls::X25519;
+    use libcrux_traits::kem::KEM;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use x25519_dalek::{PublicKey, StaticSecret};
     use tracing_subscriber::filter::LevelFilter;
+    use x25519_dalek::{PublicKey, StaticSecret};
 
     static SUBSCRIBER_INIT: Once = Once::new();
 
@@ -243,22 +163,42 @@ mod test {
 
         let ini_secret = StaticSecret::random();
         let ini_private_key = ini_secret.to_bytes();
-        let (ini_ident_privkey, ini_ident_cred) = libcrux_ed25519::generate_key_pair(&mut rng).unwrap();
+        let (ini_ident_privkey, ini_ident_cred) =
+            libcrux_ed25519::generate_key_pair(&mut rng).unwrap();
         let ini_cred_bytes = ini_ident_cred.into_bytes();
 
         trace!("setup complete");
 
         tokio::spawn(async move {
             trace!("starting responder");
-            let mut conn = match upgrade_noise_responder(
+
+            let psk_responder = psk::psq::PsqResponder::<Ed25519, X25519> {
+                auth_ident_cert: ini_cred_bytes,
+                psq_ek: libcrux_kem::PublicKey::decode(
+                    libcrux_kem::Algorithm::X25519,
+                    &resp_public_key[..],
+                )
+                .unwrap(),
+                psq_dk: libcrux_kem::PrivateKey::decode(
+                    libcrux_kem::Algorithm::X25519,
+                    &resp_private_key[..],
+                )
+                .unwrap(),
+                psk_ttl: None,
+                handle,
+            };
+
+            let mut conn = match upgrade_noise_responder::<
+                tokio::io::DuplexStream,
+                psk::psq::Psq<Ed25519, X25519>,
+            >(
                 res,
                 NoisePattern::XKpsk3,
                 &resp_public_key[..],
                 &resp_private_key[..],
-                &ini_cred_bytes,
+                psk_responder,
                 epoch.clone(),
                 resp_ctx,
-                handle,
             )
             .await
             {
@@ -294,14 +234,27 @@ mod test {
         tokio::time::sleep(Duration::from_millis(500)).await;
         trace!("beginning initiator hs");
 
-        let mut conn = match upgrade_noise_initiator(
+        let psk_initiator = psk::psq::PsqInitiator::<Ed25519, X25519> {
+            psq_ek: libcrux_kem::PublicKey::decode(
+                libcrux_kem::Algorithm::X25519,
+                &resp_public_key[..],
+            )
+            .unwrap(),
+            auth_ident_key: ini_ident_privkey.into_bytes(),
+            auth_ident_cred: ini_cred_bytes,
+            psk_ttl: None,
+        };
+
+        let mut conn = match upgrade_noise_initiator::<
+            tokio::io::DuplexStream,
+            psk::psq::Psq<Ed25519, X25519>,
+        >(
             ini,
             &mut rng,
             NoisePattern::XKpsk3,
             ini_private_key,
-            &ini_ident_privkey.as_ref()[..],
-            &ini_cred_bytes,
             resp_public_key,
+            psk_initiator,
             epoch,
             ctx,
         )
