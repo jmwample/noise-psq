@@ -86,7 +86,7 @@ where
     }
 
     /// Returns a mutable reference to the underlying I/O stream.
-    /// 
+    ///
     /// Note that care should be taken to not tamper with the underlying stream of data coming in as it may corrupt the stream of frames otherwise being worked with.
     pub fn get_mut(&mut self) -> &mut C {
         self.inner_stream.get_mut()
@@ -152,7 +152,6 @@ where
             None => Err(NoiseError::HandshakeError),
         }
     }
-
 }
 
 impl<C> AsyncRead for NoiseStream<C>
