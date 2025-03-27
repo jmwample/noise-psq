@@ -25,8 +25,6 @@ use snow::Builder;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::*;
 
-use std::time::Duration;
-
 const NOISE_PSK_PREFIX: &[u8] = b"NYMTECH_NOISE_dQw4w9WgXcQ";
 
 /// Given an async read/write stream initiate a noise handshake using the specified

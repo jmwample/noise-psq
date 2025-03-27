@@ -854,7 +854,7 @@ dependencies = [
  "pin-project",
  "pretty_env_logger",
  "rand",
- "semver",
+ "serde",
  "sha2",
  "snow",
  "thiserror",
