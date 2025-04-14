@@ -1,0 +1,31 @@
+[package]
+name = "nymnoise"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytes = "1.10.1"
+futures = "0.3"
+hex = "0.4.3"
+pin-project = "1"
+rand = "0.9"
+semver = "1.0.26"
+sha2 = "0.10.8"
+snow = "0.9.6"
+thiserror = "2.0.12"
+tokio = { version = "1.44.1", features = ["net","io-util","time"] }
+tokio-util = { version = "0.7.14", features = ["codec"] }
+tracing = "0.1.41"
+
+libcrux-psq = { git = "https://github.com/cryspen/libcrux.git", features = ["test-utils"] }
+# libcrux-psq = { path = "../psq", features = ["test-utils"] }
+libcrux-traits = { version = "0.0.2-beta.3", git = "https://github.com/cryspen/libcrux" }
+libcrux-kem = { version = "0.0.2-beta.3", git = "https://github.com/cryspen/libcrux" }
+libcrux-ed25519 = { version = "0.0.2-beta.3", git = "https://github.com/cryspen/libcrux" }
+
+[dev-dependencies]
+tokio = { version = "1.44.1", features = ["full"] }
+x25519-dalek = { version = "2.0.1", features = ["getrandom", "static_secrets"] }
+tracing-subscriber = "0.3.19"
+clap = { version = "4.5.30", features = ["derive"] }
+pretty_env_logger = "0.5.0"
