@@ -43,13 +43,13 @@ pub trait PskResponder {
 pub struct NoPsk {}
 
 impl PSK for NoPsk {
-    type Psk = [u8;0];
+    type Psk = [u8; 0];
     type Initiator = Self;
     type Responder = Self;
 }
 
 impl PskInitiator for NoPsk {
-    type Psk = [u8;0];
+    type Psk = [u8; 0];
 
     async fn initiator_establish_psk<S>(
         &self,
@@ -60,12 +60,12 @@ impl PskInitiator for NoPsk {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        Ok([0u8;0])
+        Ok([0u8; 0])
     }
 }
 
 impl PskResponder for NoPsk {
-    type Psk = [u8;0];
+    type Psk = [u8; 0];
 
     async fn responder_establish_psk<S>(
         &self,
@@ -73,11 +73,10 @@ impl PskResponder for NoPsk {
         _ctx: impl AsRef<[u8]>,
     ) -> Result<Self::Psk, NoiseError>
     where
-        S: AsyncRead + AsyncWrite + Unpin
+        S: AsyncRead + AsyncWrite + Unpin,
     {
-        Ok([0u8;0])
+        Ok([0u8; 0])
     }
 }
 
 pub mod psq;
-

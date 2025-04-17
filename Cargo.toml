@@ -2,5 +2,6 @@
 [workspace]
 resolver = "2"
 members = [
-	"crates/nymnoise"
+	"crates/nymnoise",
+    "crates/sansio-noise"
 ]
