@@ -38,63 +38,60 @@ impl From<libcrux_psq::Error> for PsqError {
     }
 }
 
-pub struct PsqBuilder<C, T>
+pub struct PsqBuilder<'builder, C, T>
 where
     C: Authenticator,
     T: PSQ,
 {
     // Required by all
-    pub local_decapsulation_key: <T::InnerKEM as KEM>::DecapsulationKey,
-    pub local_encapsulation_key: <T::InnerKEM as KEM>::EncapsulationKey,
+    pub local_decapsulation_key: Option<&'builder <T::InnerKEM as KEM>::DecapsulationKey>,
+    pub local_encapsulation_key: Option<&'builder <T::InnerKEM as KEM>::EncapsulationKey>,
 
     // Used  by all
-    pub ctx: String,
+    pub ctx: &'builder str,
     pub psk_ttl: Option<Duration>, // default 1 hour
 
     // responder only
-    pub handle: String,
+    pub handle: &'builder str,
 
     // initiator only
-    pub remote_public_key: Option<<T::InnerKEM as KEM>::EncapsulationKey>,
+    pub remote_public_key: Option<&'builder <T::InnerKEM as KEM>::EncapsulationKey>,
 
     // used when to authenticate self to peer
-    pub local_ident_key: Option<C::SigningKey>,
-    pub local_verif_key: Option<C::Credential>,
+    pub local_ident_key: Option<&'builder C::SigningKey>,
+    pub local_verif_key: Option<&'builder C::Credential>,
 
     // used when authenticating peer
-    pub remote_ident_cert: Option<C::Certificate>,
+    pub remote_ident_cert: Option<&'builder C::Certificate>,
 }
 
-impl<T> PsqBuilder<NoAuth, T>
+impl<'b, T> PsqBuilder<'b, NoAuth, T>
 where
     T: PSQ,
 {
-    pub fn new(
-        local_decapsulation_key: <T::InnerKEM as KEM>::DecapsulationKey,
-        local_encapsulation_key: <T::InnerKEM as KEM>::EncapsulationKey,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            handle: String::new(),
-            ctx: String::new(),
+            handle: "",
+            ctx: "",
             psk_ttl: None,
             remote_public_key: None,
-            local_decapsulation_key,
-            local_encapsulation_key,
+            local_decapsulation_key: None,
+            local_encapsulation_key: None,
 
             // Authentication
-            remote_ident_cert: Some([0u8; 0]),
-            local_ident_key: Some([0u8; 0]),
-            local_verif_key: Some([0u8; 0]),
+            remote_ident_cert: Some(&[0u8; 0]),
+            local_ident_key: Some(&[0u8; 0]),
+            local_verif_key: Some(&[0u8; 0]),
         }
     }
 }
 
-impl<C, T> PsqBuilder<C, T>
+impl<'b, C, T> PsqBuilder<'b, C, T>
 where
     C: Authenticator,
     T: PSQ,
 {
-    pub fn with_handle(mut self, handle: String) -> Self {
+    pub fn with_handle(mut self, handle: &'b str) -> Self {
         self.handle = handle;
         self
     }
@@ -104,14 +101,14 @@ where
         self
     }
 
-    pub fn with_ctx(mut self, ctx: String) -> Self {
+    pub fn with_ctx(mut self, ctx: &'b str) -> Self {
         self.ctx = ctx;
         self
     }
 
     pub fn remote_public_key(
         mut self,
-        remote_public_key: <T::InnerKEM as KEM>::EncapsulationKey,
+        remote_public_key: &'b <T::InnerKEM as KEM>::EncapsulationKey,
     ) -> Self {
         self.remote_public_key = Some(remote_public_key);
         self
@@ -119,8 +116,8 @@ where
 
     pub fn initiator_cert<A: Authenticator>(
         self,
-        remote_ident_cert: A::Certificate,
-    ) -> PsqBuilder<A, T> {
+        remote_ident_cert: &'b A::Certificate,
+    ) -> PsqBuilder<'b, A, T> {
         PsqBuilder {
             local_decapsulation_key: self.local_decapsulation_key,
             local_encapsulation_key: self.local_encapsulation_key,
@@ -137,9 +134,9 @@ where
 
     pub fn initiator_auth<A: Authenticator>(
         self,
-        local_ident_key: A::SigningKey,
-        local_verif_key: A::Credential,
-    ) -> PsqBuilder<A, T> {
+        local_ident_key: &'b A::SigningKey,
+        local_verif_key: &'b A::Credential,
+    ) -> PsqBuilder<'b, A, T> {
         PsqBuilder {
             local_decapsulation_key: self.local_decapsulation_key,
             local_encapsulation_key: self.local_encapsulation_key,
@@ -154,7 +151,17 @@ where
         }
     }
 
-    pub fn build_initiator(self) -> Result<PsqProtocol<C, T>, PsqError> {
+    pub fn local_key_pair(
+        mut self,
+        local_decapsulation_key: &'b <T::InnerKEM as KEM>::DecapsulationKey,
+        local_encapsulation_key: &'b <T::InnerKEM as KEM>::EncapsulationKey,
+    ) -> Self {
+        self.local_decapsulation_key = Some(local_decapsulation_key);
+        self.local_encapsulation_key = Some(local_encapsulation_key);
+        self
+    }
+
+    pub fn build_initiator(self) -> Result<PsqProtocol<'b, C, T>, PsqError> {
         if !self.handle.is_empty() {
             warn!("Handle set, but not used by the initiator");
         }
@@ -174,10 +181,9 @@ where
 
         Ok(PsqProtocol {
             initiator: true,
-            state: State::InitiatorAwaitingSend(self.remote_public_key.unwrap()),
+            state: State::InitiatorAwaitingSend,
 
-            local_decapsulation_key: self.local_decapsulation_key,
-            local_encapsulation_key: self.local_encapsulation_key,
+            psq: Psq::Initiator(self.remote_public_key.unwrap()),
             ctx: self.ctx,
             psk_ttl: self.psk_ttl,
             handle: self.handle,
@@ -186,7 +192,7 @@ where
         })
     }
 
-    pub fn build_responder(self) -> Result<PsqProtocol<C, T>, PsqError> {
+    pub fn build_responder(self) -> Result<PsqProtocol<'b, C, T>, PsqError> {
         if self.remote_public_key.is_some() {
             warn!("Remote Public Key set, but not used by the responder");
         }
@@ -205,8 +211,10 @@ where
             initiator: false,
             state: State::ResponderAwaitingReceive,
 
-            local_decapsulation_key: self.local_decapsulation_key,
-            local_encapsulation_key: self.local_encapsulation_key,
+            psq: Psq::Responder(
+                self.local_decapsulation_key.unwrap(),
+                self.local_encapsulation_key.unwrap(),
+            ),
             ctx: self.ctx,
             psk_ttl: self.psk_ttl,
             handle: self.handle,
@@ -216,27 +224,35 @@ where
     }
 }
 
-enum Auth<C: Authenticator> {
-    Initiator(C::SigningKey, C::Credential),
-    Responder(C::Certificate),
+enum Auth<'auth, C: Authenticator> {
+    Initiator(&'auth C::SigningKey, &'auth C::Credential),
+    Responder(&'auth C::Certificate),
 }
 
-enum State<T: PSQ> {
+enum Psq<'psq, T: PSQ> {
+    Initiator(&'psq <T::InnerKEM as KEM>::EncapsulationKey),
+    Responder(
+        &'psq <T::InnerKEM as KEM>::DecapsulationKey,
+        &'psq <T::InnerKEM as KEM>::EncapsulationKey,
+    ),
+}
+
+enum State {
     InitiatorAwaitingReceive(libcrux_psq::psk_registration::Initiator),
     ResponderAwaitingReceive,
-    InitiatorAwaitingSend(<T::InnerKEM as KEM>::EncapsulationKey),
+    InitiatorAwaitingSend,
     ResponderAwaitingSend(Vec<u8>, RegisteredPsk),
     Finished(RegisteredPsk),
     Failed,
 }
 
 // manual impl as inner type doesn't implement Debug
-impl<T: PSQ> Debug for State<T> {
+impl Debug for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             State::ResponderAwaitingReceive => write!(f, "AwaitingReceive"),
             State::InitiatorAwaitingReceive(_) => write!(f, "AwaitingReceive"),
-            State::InitiatorAwaitingSend(_) => write!(f, "AwaitingSend"),
+            State::InitiatorAwaitingSend => write!(f, "AwaitingSend"),
             State::ResponderAwaitingSend(_, _) => write!(f, "AwaitingSend"),
             State::Finished(_) => write!(f, "Finished"),
             State::Failed => write!(f, "Failed"),
@@ -244,29 +260,37 @@ impl<T: PSQ> Debug for State<T> {
     }
 }
 
-pub struct PsqProtocol<C, T>
+pub struct PsqProtocol<'proto, C, T>
 where
     C: Authenticator,
     T: PSQ,
 {
     initiator: bool,
-    state: State<T>,
+    state: State,
 
-    // Required by all
-    local_decapsulation_key: <T::InnerKEM as KEM>::DecapsulationKey,
-    local_encapsulation_key: <T::InnerKEM as KEM>::EncapsulationKey, // Required for now - only used by responder
+    psq: Psq<'proto, T>,
 
     // Used  by all
-    ctx: String,
+    ctx: &'proto str,
     psk_ttl: Option<Duration>, // default 1 hour
 
     // responder only
-    handle: String,
+    handle: &'proto str,
 
-    auth: Auth<C>,
+    auth: Auth<'proto, C>,
 }
 
-impl<C, T> PsqProtocol<C, T>
+impl<'p, T> PsqProtocol<'p, NoAuth, T>
+where
+    T: PSQ,
+    InitiatorMsg<<T as PSQ>::InnerKEM>: Decode,
+{
+    pub fn builder() -> PsqBuilder<'p, NoAuth, T> {
+        PsqBuilder::new()
+    }
+}
+
+impl<'p, C, T> PsqProtocol<'p, C, T>
 where
     C: Authenticator,
     T: PSQ,
@@ -313,7 +337,8 @@ where
                     return Err(PsqError::IncorrectStateError);
                 }
 
-                let (initiator_msg, n) = InitiatorMsg::<T::InnerKEM>::decode(message)?;
+                let (initiator_msg, n) = InitiatorMsg::<T::InnerKEM>::decode(message)
+                    .inspect_err(|e| error!("decode failure: {e:?}"))?;
 
                 let initiator_cert = match &self.auth {
                     Auth::Initiator(_, _) => {
@@ -323,15 +348,24 @@ where
                     Auth::Responder(cert) => cert,
                 };
 
+                let (local_decapsulation_key, local_encapsulation_key) = match &self.psq {
+                    Psq::Responder(dk, ek) => (dk, ek),
+                    Psq::Initiator(_) => {
+                        // This should be impossible to reach
+                        return Err(PsqError::IncorrectStateError);
+                    }
+                };
+
                 let (psk, msg) = Responder::send::<C, T>(
                     self.handle.as_bytes(),
                     self.psk_ttl.unwrap_or(DEFAULT_PSK_TTL),
-                    self.ctx.as_ref(),
-                    &self.local_encapsulation_key,
-                    &self.local_decapsulation_key,
+                    self.ctx.as_bytes(),
+                    &local_encapsulation_key,
+                    &local_decapsulation_key,
                     initiator_cert,
                     &initiator_msg,
-                )?;
+                )
+                .inspect_err(|e| error!("handshake failure: {e:?}"))?;
 
                 trace!("received valid initiator msg");
 
@@ -353,7 +387,7 @@ where
         buffer: &mut [u8],
     ) -> Result<usize, PsqError> {
         let (result, next_state) = match &self.state {
-            State::InitiatorAwaitingSend(remote_public_key) => {
+            State::InitiatorAwaitingSend => {
                 if !self.is_initiator() {
                     // this shouldn't be possible
                     self.state = State::Failed;
@@ -368,9 +402,17 @@ where
                     }
                 };
 
+                let remote_public_key = match &self.psq {
+                    Psq::Initiator(remote_public_key) => remote_public_key,
+                    Psq::Responder(_, _) => {
+                        // This should be impossible to reach
+                        return Err(PsqError::IncorrectStateError);
+                    }
+                };
+
                 // Generate the first PSQ message
                 let (state, msg) = Initiator::send_initial_message::<C, T>(
-                    self.ctx.as_ref(),
+                    self.ctx.as_bytes(),
                     self.psk_ttl.unwrap_or(DEFAULT_PSK_TTL),
                     remote_public_key,
                     local_ident_key,
@@ -378,7 +420,11 @@ where
                     rng,
                 )?;
                 let encoded_msg = msg.encode();
-                trace!("sending {} bytes for initiator msg", encoded_msg.len());
+                trace!(
+                    "attepting to write {}B for initiator msg into {}B buffer",
+                    encoded_msg.len(),
+                    buffer.len()
+                );
 
                 buffer[..encoded_msg.len()].copy_from_slice(&encoded_msg);
 
@@ -417,7 +463,7 @@ where
     pub fn wants_send(&self) -> bool {
         matches!(
             &self.state,
-            State::ResponderAwaitingSend(_, _) | State::InitiatorAwaitingSend(_)
+            State::ResponderAwaitingSend(_, _) | State::InitiatorAwaitingSend
         )
     }
 
@@ -452,12 +498,36 @@ mod test {
     use super::*;
 
     use libcrux_kem::{Algorithm, key_gen};
-    use libcrux_psq::{cred::Ed25519, impls::X25519};
+    use libcrux_psq::{
+        cred::Ed25519,
+        impls::{MlKem768, X25519},
+    };
 
     #[test]
     fn test_psk_mutual_auth_success() {
         crate::test::init_subscriber();
 
+        let mut rng = rand::rng();
+
+        info!("mlkem768");
+        let (resp_dk, resp_ek) = key_gen(Algorithm::MlKem768, &mut rng).unwrap();
+        test_psk_mutual_auth_success_inner::<MlKem768>(resp_dk, resp_ek);
+
+        info!("x25519");
+        let (resp_dk, resp_ek) = key_gen(Algorithm::X25519, &mut rng).unwrap();
+        test_psk_mutual_auth_success_inner::<X25519>(resp_dk, resp_ek);
+        // info!("Xwing");
+        // let (resp_dk, resp_ek) = key_gen(Algorithm::XWingKemDraft02, &mut rng).unwrap();
+        // test_psk_mutual_auth_success_inner::<XWingKemDraft02>(resp_dk, resp_ek);
+    }
+
+    fn test_psk_mutual_auth_success_inner<T>(
+        resp_dk: <T::InnerKEM as KEM>::DecapsulationKey,
+        resp_ek: <T::InnerKEM as KEM>::EncapsulationKey,
+    ) where
+        T: PSQ,
+        InitiatorMsg<<T as PSQ>::InnerKEM>: Decode,
+    {
         const CTX: &str = "example ctx";
         const HANDLE: &str = "example handle";
 
@@ -468,28 +538,24 @@ mod test {
         let init_verif_key = init_verif_key.into_bytes();
         let init_cert = init_verif_key.clone();
 
-        let (init_dk, init_ek) = key_gen(Algorithm::X25519, &mut rng).unwrap();
-        let (resp_dk, resp_ek) = key_gen(Algorithm::X25519, &mut rng).unwrap();
-        let resp_ek_bytes = resp_ek.encode();
-        let resp_ek1 = libcrux_kem::PublicKey::decode(Algorithm::X25519, &resp_ek_bytes).unwrap();
-
         // info shared ahead of time out of band
         //    responder -> initiator: resp_pubkey, CTX
         //    initiator -> responder: init_verif_key
 
-        let mut initiator: PsqProtocol<Ed25519, X25519> = PsqBuilder::new(init_dk, init_ek)
+        let mut initiator: PsqProtocol<Ed25519, T> = PsqBuilder::new()
             .with_psk_ttl(Duration::from_secs(10))
-            .remote_public_key(resp_ek)
-            .initiator_auth(init_signing_key, init_verif_key)
-            .with_ctx(CTX.to_string())
+            .remote_public_key(&resp_ek)
+            .initiator_auth(&init_signing_key, &init_verif_key)
+            .with_ctx(CTX)
             .build_initiator()
             .expect("failed to build initiator");
 
-        let mut responder: PsqProtocol<Ed25519, X25519> = PsqBuilder::new(resp_dk, resp_ek1)
+        let mut responder: PsqProtocol<Ed25519, T> = PsqBuilder::new()
+            .local_key_pair(&resp_dk, &resp_ek)
             .with_psk_ttl(Duration::from_secs(10))
-            .initiator_cert(init_cert)
-            .with_handle(HANDLE.to_string())
-            .with_ctx(CTX.to_string())
+            .initiator_cert(&init_cert)
+            .with_handle(HANDLE)
+            .with_ctx(CTX)
             .build_responder()
             .expect("failed to build responder");
 
@@ -539,129 +605,3 @@ mod test {
         debug!("PSK: {:?}", hex::encode(initiator_psk.psk));
     }
 }
-
-// pub struct PsqInitiator<C: Authenticator, T: PSQ> {
-//     pub auth_ident_key: C::SigningKey,
-//     pub auth_ident_cred: C::Credential,
-//     pub psq_ek: <T::InnerKEM as KEM>::EncapsulationKey,
-//     pub psk_ttl: Option<Duration>,
-// }
-
-// impl<C: Authenticator, T: PSQ> PskInitiator for PsqInitiator<C, T>
-// where
-//     C: Authenticator,
-//     T: PSQ,
-//     InitiatorMsg<<T as PSQ>::InnerKEM>: Encode,
-// {
-//     type Psk = PsqPsk;
-
-//     async fn initiator_establish_psk<S>(
-//         &self,
-//         conn: &mut S,
-//         rng: &mut impl CryptoRng,
-//         ctx: impl AsRef<[u8]>,
-//     ) -> Result<Self::Psk, NoiseError>
-//     where
-//         S: AsyncRead + AsyncWrite + Unpin,
-//     {
-//         // Generate the first PSQ message
-//         let (state, msg) = Initiator::send_initial_message::<C, T>(
-//             ctx.as_ref(),
-//             self.psk_ttl.unwrap_or(DEFAULT_PSK_TTL),
-//             &self.psq_ek,
-//             &self.auth_ident_key,
-//             &self.auth_ident_cred,
-//             rng,
-//         )
-//         .unwrap();
-//         let encoded_msg = msg.encode();
-//         trace!("sending {} bytes for initiator msg", encoded_msg.len());
-//         conn.write_all(&(encoded_msg.len() as u64).to_be_bytes())
-//             .await?;
-//         conn.write_all(&encoded_msg).await?;
-
-//         // Read the response
-//         let mut msg_size = [0u8; 8];
-//         conn.read_exact(&mut msg_size).await?;
-//         let msg_size = u64::from_be_bytes(msg_size);
-//         trace!("reading {} bytes for responder msg", msg_size);
-
-//         let mut responder_msg = vec![0u8; msg_size as usize];
-//         conn.read_exact(&mut responder_msg).await?;
-//         let (responder_msg, _) = ResponderMsg::decode(&responder_msg)?;
-
-//         // Finish the handshake
-//         let psk = state.complete_handshake(&responder_msg)?;
-
-//         debug!(
-//             "Registered psk for: {}",
-//             String::from_utf8(psk.psk_handle.clone()).unwrap()
-//         );
-//         debug!("  with psk: {:x?}", psk.psk);
-
-//         Ok(psk.psk)
-//     }
-// }
-
-// pub struct PsqResponder<C: Authenticator, T: PSQ> {
-//     pub auth_ident_cert: C::Certificate,
-//     pub psq_ek: <T::InnerKEM as KEM>::EncapsulationKey,
-//     pub psq_dk: <T::InnerKEM as KEM>::DecapsulationKey,
-//     pub psk_ttl: Option<Duration>,
-//     pub handle: String, // todo: change type?
-// }
-
-// impl<C, T> PskResponder for PsqResponder<C, T>
-// where
-//     C: Authenticator,
-//     T: PSQ,
-//     InitiatorMsg<<T as PSQ>::InnerKEM>: Decode,
-// {
-//     type Psk = PsqPsk;
-
-//     async fn responder_establish_psk<S>(
-//         &self,
-//         conn: &mut S,
-//         ctx: impl AsRef<[u8]>,
-//     ) -> Result<Self::Psk, NoiseError>
-//     where
-//         S: AsyncRead + AsyncWrite + Unpin,
-//     {
-//         // Read the initial PSQ message.
-//         // First the length as u64.
-//         let mut msg_size = [0u8; 8];
-//         conn.read_exact(&mut msg_size).await?;
-//         let msg_size = u64::from_be_bytes(msg_size);
-//         trace!("reading {} bytes for initiator msg", msg_size);
-
-//         let mut msg = vec![0u8; msg_size as usize];
-//         conn.read_exact(&mut msg).await?;
-//         let (msg, _) = InitiatorMsg::<T::InnerKEM>::decode(&msg)?;
-
-//         let (psk, msg) = Responder::send::<C, T>(
-//             self.handle.as_bytes(),
-//             self.psk_ttl.unwrap_or(DEFAULT_PSK_TTL),
-//             ctx.as_ref(),
-//             &self.psq_ek,
-//             &self.psq_dk,
-//             &self.auth_ident_cert,
-//             &msg,
-//         )?;
-
-//         trace!("received valid initiator msg");
-
-//         // Send the message back.
-//         let encoded_msg = msg.encode();
-//         let msg_size = (encoded_msg.len() as u64).to_be_bytes();
-//         conn.write_all(&msg_size).await?;
-//         conn.write_all(&encoded_msg).await?;
-
-//         debug!(
-//             "Registered psk for: {}",
-//             String::from_utf8(psk.psk_handle.clone()).unwrap()
-//         );
-//         debug!("  with psk: {:x?}", psk.psk);
-
-//         Ok(psk.psk)
-//     }
-// }

@@ -1,17 +1,21 @@
 use std::{env, str::FromStr};
 
 use clap::Parser;
-use tracing_subscriber::filter::LevelFilter;
 use libcrux_psq::{
     cred::{Authenticator, Ed25519},
     impls::MlKem768,
 };
 use libcrux_traits::kem::KEM;
-use tokio::{net::{TcpListener, TcpStream}, io::{AsyncReadExt, AsyncWriteExt}};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+};
 use tracing::*;
+use tracing_subscriber::filter::LevelFilter;
 
 use nymnoise::{
-    psk::{PskInitiator, PskResponder}, NoiseError
+    NoiseError,
+    psk::{PskInitiator, PskResponder},
 };
 
 /// This is hardcoded for ML-KEM 768, for ClassicMcEliece it would be `524160`.
@@ -108,7 +112,9 @@ async fn initiator(host: String, port: u16, ctx: String) -> Result<(), NoiseErro
     };
 
     let mut rng = rand::rng();
-    let psk = psk.initiator_establish_psk(&mut stream, &mut rng, ctx).await?;
+    let psk = psk
+        .initiator_establish_psk(&mut stream, &mut rng, ctx)
+        .await?;
 
     debug!("  with psk: {:x?}", hex::encode(psk));
 
@@ -142,7 +148,6 @@ async fn responder(host: String, port: u16, ctx: String, handle: String) -> Resu
             (initiator_credential, sk, pk)
         };
 
-
         let psk_responder = nymnoise::psk::psq::PsqResponder::<Ed25519, MlKem768> {
             auth_ident_cert: initiator_credential,
             psq_ek: pk,
@@ -151,7 +156,9 @@ async fn responder(host: String, port: u16, ctx: String, handle: String) -> Resu
             handle: handle.clone(),
         };
 
-        let psk = psk_responder.responder_establish_psk(&mut stream, &ctx).await?;
+        let psk = psk_responder
+            .responder_establish_psk(&mut stream, &ctx)
+            .await?;
 
         info!("negotiated psk: {:x?}", hex::encode(psk));
     }

@@ -1136,6 +1136,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 name = "sansio-noise"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "hex",
  "libcrux-ed25519",
  "libcrux-kem",
@@ -1144,6 +1145,7 @@ dependencies = [
  "rand",
  "snow",
  "thiserror",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "x25519-dalek",

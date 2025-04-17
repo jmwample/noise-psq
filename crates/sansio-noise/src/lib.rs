@@ -1,3 +1,5 @@
+use libcrux_psq::{cred::Authenticator, traits::PSQ};
+
 pub mod noise;
 pub mod psk;
 
@@ -18,4 +20,14 @@ mod test {
             tracing_subscriber::fmt().with_max_level(lf).init();
         });
     }
+}
+
+struct Protocol<'proto, C, T>
+where
+    C: Authenticator,
+    T: PSQ,
+{
+    is_initiator: bool,
+    psk: psk::PsqProtocol<'proto, C, T>,
+    noise: noise::NoiseProtocol,
 }
